@@ -1,9 +1,3 @@
-#############################################################################
-#   $Author: markus $
-#     $Date: 2010-08-06 00:37:10 +0200 (Fri, 06 Aug 2010) $
-# $Revision: 2106 $
-#############################################################################
-
 package Text::CSV::R;
 
 require 5.005;
@@ -29,7 +23,7 @@ our %EXPORT_TAGS = (
 
 our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 our $DEFAULT_OPTS = {
     header           => undef,
@@ -63,8 +57,8 @@ our $R_OPT_MAP = {
 sub colnames {
     my ( $tied_ref, $values ) = @_;
     my $tied_obj = tied @{$tied_ref};
-    if ( defined $values ) { $tied_obj->{colnames} = $values; }
-    return $tied_obj->{colnames};
+    if ( defined $values ) { $tied_obj->{COLNAMES} = $values; }
+    return $tied_obj->{COLNAMES};
 }
 
 sub rownames {
@@ -74,9 +68,9 @@ sub rownames {
         if ( scalar @{$values} != scalar @{ $tied_obj->{ARRAY} } ) {
             croak 'Invalid rownames length';
         }
-        $tied_obj->{rownames} = $values;
+        $tied_obj->{ROWNAMES} = $values;
     }
-    return $tied_obj->{rownames};
+    return $tied_obj->{ROWNAMES};
 }
 
 # merge the global default options, function defaults and user options
@@ -138,7 +132,10 @@ sub _get_fh {
         if ( defined $opts->{encoding} && length $opts->{encoding} > 0 ) {
             $encoding = ':encoding(' . $opts->{encoding} . ')';
         }
-        my $mode = $read ? '<' : '>';
+        my $mode
+            = $read ? '<'
+            : ( defined $opts->{append} && $opts->{append} ) ? '>>'
+            :                                                  '>';
         open my $IN, $mode . $encoding, $file
             or croak "Cannot open $file for reading: $!";
         return ( $IN, 1 );
@@ -150,7 +147,7 @@ sub _get_fh {
 sub _replace_dec {
     my ( $data_ref, $opts ) = @_;
     if ( defined $opts->{dec} && $opts->{dec} ne q{.} ) {
-        for my $row (@$data_ref) {
+        for my $row (@{$data_ref}) {
             $row = [
                 map {
                     ( my $tmp = $_ ) =~ s/$opts->{dec}/./;
@@ -159,6 +156,7 @@ sub _replace_dec {
             ];
         }
     }
+    return;
 }
 
 sub _read {
@@ -207,7 +205,7 @@ sub _write_to_fh {
     my @data = @{$data_ref};
 
     if ($rownames) {
-        @data = map { [ $tied_obj->{rownames}->[$_], @{ $data[$_] } ] }
+        @data = map { [ $tied_obj->{ROWNAMES}->[$_], @{ $data[$_] } ] }
             0 .. $#data;
     }
 
@@ -317,7 +315,7 @@ Text::CSV::R - Text::CSV wrapper similar to R's read.table and write.table
   #use Text::CSV::R qw(:all);
   use Text::CSV::R qw(read_table write_csv colnames rownames);
 
-  my $M = read_table($filename, \%options);
+  my $M = read_table($filename, %options);
 
   print join(q{,}, colnames($M));
   print join(q{,}, rownames($M));
@@ -385,8 +383,17 @@ written (see L</OPTIONS>).  The C<$file> can be a filename or a filehandle.
   # the fields 
   write_table(\@array, $newfile); 
 
+Headers include no column for the row names, i.e. the number of columns in the
+header is the number of data columns - 1 if row names are provided.
+
 =item write_csv($array_ref, $file, %options)
-  
+
+Similar to 
+
+    write_table($file, sep_char => "\t" );
+
+The only difference is that headers include a column for the row names.
+
 =item colnames($M, $array_ref)
 
 Get and set (if C<$array_ref> defined) the colnames.
@@ -508,6 +515,15 @@ implementation. In doubt, consult the L<Text::CSV> documentation.
   Default     : \n
   Description : the character(s) to print at the end of each line (row).
 
+=item append
+
+  Text::CSV   : 
+  R           : append
+  Default     : 
+  Description : Only relevant if ‘file’ is a character string.  If true,
+                the output is appended to the file.  Otherwise, any
+                existing file of the name is destroyed.
+
 =item col_names, row_names
 
   Text::CSV   : 
@@ -522,7 +538,7 @@ implementation. In doubt, consult the L<Text::CSV> documentation.
 
 =head1 SEE ALSO
 
-L<Text::CSV>, L<Spreadsheet::Read>
+L<Text::CSV>, L<Text::CSV::Slurp>, L<Spreadsheet::Read>
 
 =head1 DIFFERENCES TO R
 

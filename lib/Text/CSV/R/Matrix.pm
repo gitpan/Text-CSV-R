@@ -1,9 +1,3 @@
-#############################################################################
-#   $Author: markus $
-#     $Date: 2010-08-06 00:37:10 +0200 (Fri, 06 Aug 2010) $
-# $Revision: 2106 $
-#############################################################################
-
 package Text::CSV::R::Matrix;
 
 require 5.005;
@@ -15,11 +9,11 @@ use Tie::Array;
 
 our @ISA = 'Tie::Array';
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 sub TIEARRAY {
     my ($self) = @_;
-    return bless { ARRAY => [], rownames => [], colnames => [], }, $self;
+    return bless { ARRAY => [], ROWNAMES => [], COLNAMES => [], }, $self;
 }
 
 sub FETCH {
@@ -41,7 +35,7 @@ sub FETCHSIZE {
 sub STORESIZE {
     my ( $self, $value ) = @_;
     $#{ $self->{ARRAY} }    = $value - 1;
-    $#{ $self->{rownames} } = $value - 1;
+    $#{ $self->{ROWNAMES} } = $value - 1;
     return;
 }
 
@@ -65,9 +59,9 @@ sub SPLICE {
     }
     my $len = @_ ? shift : $sz - $off;
 
-    # if LIST provided, empty new rownames
+    # if LIST provided, empty new ROWNAMES
     my @rn = map {q{}} @_;
-    splice @{ $ob->{rownames} }, $off, $len, @rn;
+    splice @{ $ob->{ROWNAMES} }, $off, $len, @rn;
     return splice @{ $ob->{ARRAY} }, $off, $len, @_;
 }
 
