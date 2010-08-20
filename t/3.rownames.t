@@ -1,8 +1,8 @@
 #!perl -T
-use Test::More tests => 9;
+use Test::More tests => 13;
 use Test::NoWarnings;
 
-use Text::CSV::R qw(rownames read_csv);
+use Text::CSV::R qw(rownames colnames read_csv);
 
 my $M_ref = read_csv('t/testfiles/imdb.dat');
 
@@ -11,6 +11,18 @@ $M_ref = read_csv('t/testfiles/imdb.dat',  'row_names' =>2 );
 
 eval { rownames($M_ref, [ 1, 2]) };
 like( $@, qr/^Invalid rownames length/, 'rownames too short' );
+
+eval { rownames($M_ref, ( 1, 2, 3)) };
+like( $@, qr/^Invalid rownames length/, 'rownames not array' );
+
+eval { rownames($M_ref, { 1=>2, 3=>4}) };
+like( $@, qr/^Invalid rownames length/, 'rownames hash ref' );
+
+eval { colnames($M_ref, ( 1, 2, 3)) };
+like( $@, qr/^Invalid colnames length/, 'colnames not array' );
+
+eval { colnames($M_ref, { 1=>2, 3=>4}) };
+like( $@, qr/^Invalid colnames length/, 'colames hash ref' );
 
 # test splicing
 splice @{$M_ref}, 1, 1;

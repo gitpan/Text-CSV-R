@@ -9,7 +9,7 @@ use Tie::Array;
 
 our @ISA = 'Tie::Array';
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 sub TIEARRAY {
     my ($self) = @_;
@@ -45,17 +45,12 @@ sub EXTEND {
     return;
 }
 
-sub DELETE {
-    my ( $self, $index ) = @_;
-    return $self->STORE( $index, q{} );
-}
-
 sub SPLICE {
     my $ob  = shift;
     my $sz  = $ob->FETCHSIZE;
     my $off = @_ ? shift : 0;
-    if ($off < 0) {
-        $off += $sz
+    if ( $off < 0 ) {
+        $off += $sz;
     }
     my $len = @_ ? shift : $sz - $off;
 

@@ -15,62 +15,63 @@ our @ISA = qw(Exporter);
 
 our %EXPORT_TAGS = (
     'all' => [
-        qw(
-            read_csv read_csv2 read_table read_delim write_table write_csv rownames colnames
-            )
+        qw(read_csv read_csv2 read_table read_delim write_table write_csv rownames colnames)
     ]
 );
 
 our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 our $DEFAULT_OPTS = {
-    header           => undef,
     skip             => 0,
     nrow             => -1,
     sep_char         => "\t",
-    quote_char       => q{"},
-    allow_whitespace => 0,
     binary           => 1,
     blank_lines_skip => 1,
 };
 
-# A mapping of the R options to the Text:CSV options. If there is no
-# Text::CSV equivalent, the same option name is used (R options are
-# not passed to Text::CSV).
+# A mapping of the R options to the Text:CSV options. False if there is no
+# Text::CSV equivalent (specified because R options are not passed to
+# Text::CSV, so we need to know all of them).
 our $R_OPT_MAP = {
-    sep              => 'sep_char',
-    dec              => 'dec',
-    quote            => 'quote_char',
-    skip             => 'skip',
-    nrow             => 'nrow',
-    header           => 'header',
-    encoding         => 'encoding',
-    row_names        => 'row_names',
-    strip_white      => 'allow_whitespace',
-    blank_lines_skip => 'blank_lines_skip',
-    append           => 'append',
-    hr               => 'hr',              # header contains col for rownames?
+    sep         => 'sep_char',
+    strip_white => 'allow_whitespace',
+    quote       => 'quote_char',
+    map { $_ => 0 }
+        qw(dec skip nrow header encoding row_names col_names
+        blank_lines_skip append hr),
 };
 
 sub colnames {
     my ( $tied_ref, $values ) = @_;
     my $tied_obj = tied @{$tied_ref};
-    if ( defined $values ) { $tied_obj->{COLNAMES} = $values; }
+    if ( defined $values ) {
+        if ( !_is_array_ref($values) ) {
+            croak 'Invalid colnames length';
+        }
+        $tied_obj->{COLNAMES} = $values;
+    }
     return $tied_obj->{COLNAMES};
 }
 
 sub rownames {
     my ( $tied_ref, $values ) = @_;
     my $tied_obj = tied @{$tied_ref};
-    if ( defined $values && reftype $values eq 'ARRAY' ) {
-        if ( scalar @{$values} != scalar @{ $tied_obj->{ARRAY} } ) {
+    if ( defined $values ) {
+        if ( !_is_array_ref($values)
+            || scalar @{$values} != scalar @{ $tied_obj->{ARRAY} } )
+        {
             croak 'Invalid rownames length';
         }
         $tied_obj->{ROWNAMES} = $values;
     }
     return $tied_obj->{ROWNAMES};
+}
+
+sub _is_array_ref {
+    my ($values) = @_;
+    return ( defined reftype $values && reftype $values eq 'ARRAY' ) ? 1 : 0;
 }
 
 # merge the global default options, function defaults and user options
@@ -80,7 +81,7 @@ sub _merge_options {
     @ret{ keys %{$t_opt} } = values %{$t_opt};
     @ret{ keys %{$u_opt} } = values %{$u_opt};
     for my $k ( keys %{$R_OPT_MAP} ) {
-        if ( defined $ret{$k} ) {
+        if ( defined $ret{$k} && $R_OPT_MAP->{$k} ) {
             $ret{ $R_OPT_MAP->{$k} } = $ret{$k};
         }
     }
@@ -100,7 +101,7 @@ sub read_csv {
 
 sub read_csv2 {
     my ( $file, %u_opt ) = @_;
-    my $t_opt = { sep_char => q{;}, header => 1, };
+    my $t_opt = { sep_char => q{;}, dec => q{,}, header => 1, };
     return _read( $file, _merge_options( $t_opt, \%u_opt ) );
 }
 
@@ -145,31 +146,36 @@ sub _get_fh {
 
 # replace decimal point if necessary
 sub _replace_dec {
-    my ( $data_ref, $opts ) = @_;
+    my ( $data_ref, $opts, $read ) = @_;
     if ( defined $opts->{dec} && $opts->{dec} ne q{.} ) {
-        for my $row (@{$data_ref}) {
-            $row = [
-                map {
-                    ( my $tmp = $_ ) =~ s/$opts->{dec}/./;
-                    looks_like_number($tmp) ? $tmp : $_
-                    } @$row
-            ];
+        for my $row ( @{$data_ref} ) {
+            $row = [ map { _replace_dec_col( $_, $opts, $read ) } @{$row} ];
         }
     }
     return;
 }
 
+sub _replace_dec_col {
+    my ( $col, $opts, $read ) = @_;
+    if ($read) {
+        ( my $tmp = $col ) =~ s{$opts->{dec}}{.}xms;
+        $col = looks_like_number($tmp) ? $tmp : $col;
+    }
+    elsif ( looks_like_number($col) ) {
+        $col =~ s{\.}{$opts->{dec}}xms;
+    }
+    return $col;
+}
+
 sub _read {
     my ( $file, $opts ) = @_;
 
-    my $data_ref;
-
     my ( $fh, $toclose ) = _get_fh( $file, 1, $opts );
-    $data_ref = _parse_fh( $fh, $opts );
+    my $data_ref = _parse_fh( $fh, $opts );
     if ($toclose) {
         close $fh or croak "Cannot close $file: $!";
     }
-    _replace_dec( $data_ref, $opts );
+    _replace_dec( $data_ref, $opts, 1 );
     return $data_ref;
 }
 
@@ -177,6 +183,7 @@ sub _write {
     my ( $data_ref, $file, $opts ) = @_;
 
     my ( $fh, $toclose ) = _get_fh( $file, 0, $opts );
+    _replace_dec( $data_ref, $opts, 0 );
     _write_to_fh( $data_ref, $fh, $opts );
     if ($toclose) {
         close $fh or croak "Cannot close $file: $!";
@@ -184,33 +191,45 @@ sub _write {
     return;
 }
 
-sub _write_to_fh {
-    my ( $data_ref, $IN, $opts ) = @_;
-
-    my $tied_obj      = tied @{$data_ref};
-    my %text_csv_opts = %{$opts};
+sub _create_csv_obj {
+    my %text_csv_opts = @_;
     delete @text_csv_opts{ keys %{$R_OPT_MAP} };
     my $csv = Text::CSV->new( \%text_csv_opts )
         or croak q{Cannot use CSV: } . Text::CSV->error_diag();
+    return $csv;
+}
+
+sub _write_to_fh {
+    my ( $data_ref, $IN, $opts ) = @_;
+
+    my $tied_obj = tied @{$data_ref};
+    my $csv      = _create_csv_obj( %{$opts} );
 
     my $rownames
-        = !defined $tied_obj         ? 0
-        : defined $opts->{row_names} ? $opts->{row_names}
-        :                              1;
+        = defined $opts->{row_names} ? $opts->{row_names}
+        : defined $tied_obj          ? 1
+        :                              0;
     my $colnames
-        = !defined $tied_obj         ? 0
-        : defined $opts->{col_names} ? $opts->{col_names}
-        :                              1;
+        = defined $opts->{col_names} ? $opts->{col_names}
+        : defined $tied_obj          ? 1
+        :                              0;
 
     my @data = @{$data_ref};
 
     if ($rownames) {
-        @data = map { [ $tied_obj->{ROWNAMES}->[$_], @{ $data[$_] } ] }
-            0 .. $#data;
+        $rownames
+            = reftype \$rownames eq 'SCALAR'
+            ? rownames($data_ref)
+            : $rownames;
+        @data = map { [ $rownames->[$_], @{ $data[$_] } ] } 0 .. $#data;
     }
 
     if ($colnames) {
-        unshift @data, colnames($data_ref);
+        $colnames
+            = reftype \$colnames eq 'SCALAR'
+            ? colnames($data_ref)
+            : $colnames;
+        unshift @data, $colnames;
         if ( defined $opts->{hr} && $opts->{hr} ) {
             unshift @{ $data[0] }, q{};
         }
@@ -227,54 +246,43 @@ sub _parse_fh {
     my @data;
 
     my $obj = tie @data, 'Text::CSV::R::Matrix';
-    my %text_csv_opts = %{$opts};
-    delete @text_csv_opts{ keys %{$R_OPT_MAP} };
-    my $csv = Text::CSV->new( \%text_csv_opts )
-        or croak q{Cannot use CSV: } . Text::CSV->error_diag();
 
-    # skip lines
-    my $line_number = 0;
-    while ( $line_number < $opts->{skip} && <$IN> ) {
-        $line_number++;
+    my $csv = _create_csv_obj( %{$opts} );
+
+    # skip the first lines if option is set
+    {
+        local $. = 0;
+        do { } while ( $. < $opts->{skip} && <$IN> );
     }
-    $line_number = 0;
+
     my $max_cols = 0;
 LINE:
     while ( my $line = <$IN> ) {
         chomp $line;
 
         # blank_lines_skip option
-        if (  !length($line)
-            && defined $opts->{'blank_lines_skip'}
-            && $opts->{'blank_lines_skip'} )
-        {
-            next LINE;
-        }
+        next LINE if !length($line) && $opts->{'blank_lines_skip'};
 
-        my $status = $csv->parse($line)
+        $csv->parse($line)
             or croak q{Cannot parse CSV: } . $csv->error_input();
         push @data, [ $csv->fields() ];
         if ( scalar( @{ $data[-1] } ) > $max_cols ) {
             $max_cols = scalar @{ $data[-1] };
         }
-        $line_number++;
 
         # nrow option. Store one more because file might contain header.
-        last LINE
-            if ( defined $opts->{nrow}
-            && $opts->{nrow} >= 0
-            && $line_number > $opts->{nrow} );
+        last LINE if ( $opts->{nrow} >= 0 && $. > $opts->{nrow} );
     }
 
-    my $auto_col_row = scalar @{ $data[0] } == $max_cols - 1 ? 1 : 0;
+    my $auto_col_row = scalar @{ $data[0] || [] } == $max_cols - 1 ? 1 : 0;
 
     # read column names
-    if ( $auto_col_row || ( defined $opts->{header} && $opts->{header} ) ) {
+    if ( $auto_col_row || $opts->{header} ) {
         colnames( \@data, shift @data );
     }
     else {
         colnames( \@data, [ map { 'V' . $_ } 1 .. $max_cols ] );
-        if ( defined $opts->{nrow} && scalar(@data) > $opts->{nrow} ) {
+        if ( $opts->{nrow} >= 0 && $. > $opts->{nrow} ) {
             pop @data;
         }
     }
@@ -409,7 +417,7 @@ Get and set (if C<$array_ref> defined) the rownames.
 All non-R options are passed to L<Text::CSV>. Listed are now the supported R
 options. If there is a L<Text::CSV> equivalent, you can either use the
 L<Text::CSV> or the R option name. There might be subtle differences to the R
-implementation. In doubt, consult the L<Text::CSV> documentation.
+implementation. 
 
 =over
 
@@ -423,6 +431,13 @@ implementation. In doubt, consult the L<Text::CSV> documentation.
   R          : sep
   Default    : \t 
   Description: the field separator character
+
+=item dec
+
+  Text::CSV   :  
+  R           : dec
+  Default     : .
+  Description : the character used in the file for decimal points.
 
 =item quote
 
@@ -453,13 +468,6 @@ implementation. In doubt, consult the L<Text::CSV> documentation.
                 column names as its first line. If not specified, set to
                 1 if and only if the first row contains one fewer field 
                 than the row with the maximal number of fields.
-
-=item dec
-
-  Text::CSV   :  
-  R           : dec
-  Default     : .
-  Description : the character used in the file for decimal points.
 
 =item blank_lines_skip
 
@@ -520,7 +528,7 @@ implementation. In doubt, consult the L<Text::CSV> documentation.
   Text::CSV   : 
   R           : append
   Default     : 
-  Description : Only relevant if ‘file’ is a character string.  If true,
+  Description : Only relevant if 'file' is a character string.  If true,
                 the output is appended to the file.  Otherwise, any
                 existing file of the name is destroyed.
 
@@ -529,9 +537,11 @@ implementation. In doubt, consult the L<Text::CSV> documentation.
   Text::CSV   : 
   R           : col.names, row.names
   Default     : 1 if array is tied to Text::CSV::R::Matrix, 0 otherwise
-  Description : specifies whether col and rownames should be printed. Requires that
-                array is tied to Text::CSV::R::Matrix
-
+  Description : if scalar, then specifies whether col and rownames should be printed. 
+                Requires that array is tied to Text::CSV::R::Matrix. It is
+                also possible to provide the col and rownames by array
+                reference.
+                   
 =back
 
 =back
@@ -553,11 +563,11 @@ L<Text::CSV> counterparts do not.
 =item There is no C<fill> option because Perl 2D arrays do not need to have a
 fixed number of columns.
 
-=item The C<dec> option is only supported for reading files.
-
 =back
 
 =head1 BUGS AND LIMITATIONS
+
+The encode option requires Perl 5.8 or newer.
 
 Please report any bugs or feature requests to
 C<bug-text-csv-r@rt.cpan.org>, or through the web interface at
