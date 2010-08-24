@@ -9,7 +9,7 @@ require Exporter;
 use Text::CSV;
 use Text::CSV::R::Matrix;
 use Carp;
-use Scalar::Util qw(reftype looks_like_number);
+use Scalar::Util qw(reftype looks_like_number openhandle);
 
 our @ISA = qw(Exporter);
 
@@ -21,15 +21,7 @@ our %EXPORT_TAGS = (
 
 our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
-our $VERSION = '0.03';
-
-our $DEFAULT_OPTS = {
-    skip             => 0,
-    nrow             => -1,
-    sep_char         => "\t",
-    binary           => 1,
-    blank_lines_skip => 1,
-};
+our $VERSION = '0.1';
 
 # A mapping of the R options to the Text:CSV options. False if there is no
 # Text::CSV equivalent (specified because R options are not passed to
@@ -43,41 +35,16 @@ our $R_OPT_MAP = {
         blank_lines_skip append hr),
 };
 
-sub colnames {
-    my ( $tied_ref, $values ) = @_;
-    my $tied_obj = tied @{$tied_ref};
-    if ( defined $values ) {
-        if ( !_is_array_ref($values) ) {
-            croak 'Invalid colnames length';
-        }
-        $tied_obj->{COLNAMES} = $values;
-    }
-    return $tied_obj->{COLNAMES};
-}
-
-sub rownames {
-    my ( $tied_ref, $values ) = @_;
-    my $tied_obj = tied @{$tied_ref};
-    if ( defined $values ) {
-        if ( !_is_array_ref($values)
-            || scalar @{$values} != scalar @{ $tied_obj->{ARRAY} } )
-        {
-            croak 'Invalid rownames length';
-        }
-        $tied_obj->{ROWNAMES} = $values;
-    }
-    return $tied_obj->{ROWNAMES};
-}
-
-sub _is_array_ref {
-    my ($values) = @_;
-    return ( defined reftype $values && reftype $values eq 'ARRAY' ) ? 1 : 0;
-}
-
 # merge the global default options, function defaults and user options
 sub _merge_options {
     my ( $t_opt, $u_opt ) = @_;
-    my %ret = %{$DEFAULT_OPTS};
+    my %ret = (
+        skip             => 0,
+        nrow             => -1,
+        sep_char         => "\t",
+        binary           => 1,
+        blank_lines_skip => 1,
+    );
     @ret{ keys %{$t_opt} } = values %{$t_opt};
     @ret{ keys %{$u_opt} } = values %{$u_opt};
     for my $k ( keys %{$R_OPT_MAP} ) {
@@ -123,25 +90,34 @@ sub write_csv {
     return _write( $data_ref, $file, _merge_options( $t_opt, \%u_opt ) );
 }
 
-# check if $file is a filehandle, if not open file with correct encoding.
-# return also whether to close the filehandle or not
+sub rownames {
+    my ( $tied_ref, $values ) = @_;
+    return Text::CSV::R::Matrix::ROWNAMES( tied @{$tied_ref}, $values );
+}
+
+sub colnames {
+    my ( $tied_ref, $values ) = @_;
+    return Text::CSV::R::Matrix::COLNAMES( tied @{$tied_ref}, $values );
+}
+
+# check if $file is an open filehandle, if not open file with correct
+# encoding.  return also whether to close the filehandle or not
 sub _get_fh {
     my ( $file, $read, $opts ) = @_;
-
-    if ( reftype \$file eq 'SCALAR' ) {
-        my $encoding = q{};
-        if ( defined $opts->{encoding} && length $opts->{encoding} > 0 ) {
-            $encoding = ':encoding(' . $opts->{encoding} . ')';
-        }
-        my $mode
-            = $read ? '<'
-            : ( defined $opts->{append} && $opts->{append} ) ? '>>'
-            :                                                  '>';
-        open my $IN, $mode . $encoding, $file
-            or croak "Cannot open $file for reading: $!";
-        return ( $IN, 1 );
+    if ( openhandle($file) ) {
+        return ( $file, 0 );
     }
-    return ( $file, 0 );
+    my $encoding = q{};
+    if ( defined $opts->{encoding} && length $opts->{encoding} > 0 ) {
+        $encoding = ':encoding(' . $opts->{encoding} . ')';
+    }
+    my $mode
+        = $read ? '<'
+        : ( defined $opts->{append} && $opts->{append} ) ? '>>'
+        :                                                  '>';
+    open my $IN, $mode . $encoding, $file
+        or croak "Cannot open $file for reading: $!";
+    return ( $IN, 1 );
 }
 
 # replace decimal point if necessary
@@ -205,31 +181,30 @@ sub _write_to_fh {
     my $tied_obj = tied @{$data_ref};
     my $csv      = _create_csv_obj( %{$opts} );
 
-    my $rownames
-        = defined $opts->{row_names} ? $opts->{row_names}
-        : defined $tied_obj          ? 1
-        :                              0;
-    my $colnames
-        = defined $opts->{col_names} ? $opts->{col_names}
-        : defined $tied_obj          ? 1
-        :                              0;
+    # do we have and want col/rownames?
+    my %meta = map {
+              $_ => defined $opts->{$_} ? $opts->{$_}
+            : defined $tied_obj ? 1
+            : 0
+    } qw(row_names col_names);
 
     my @data = @{$data_ref};
 
-    if ($rownames) {
-        $rownames
-            = reftype \$rownames eq 'SCALAR'
+    if ( $meta{row_names} ) {
+        $meta{row_names}
+            = reftype \$meta{row_names} eq 'SCALAR'
             ? rownames($data_ref)
-            : $rownames;
-        @data = map { [ $rownames->[$_], @{ $data[$_] } ] } 0 .. $#data;
+            : $meta{row_names};
+        @data
+            = map { [ $meta{row_names}->[$_], @{ $data[$_] } ] } 0 .. $#data;
     }
 
-    if ($colnames) {
-        $colnames
-            = reftype \$colnames eq 'SCALAR'
+    if ( $meta{col_names} ) {
+        $meta{col_names}
+            = reftype \$meta{col_names} eq 'SCALAR'
             ? colnames($data_ref)
-            : $colnames;
-        unshift @data, $colnames;
+            : $meta{col_names};
+        unshift @data, $meta{col_names};
         if ( defined $opts->{hr} && $opts->{hr} ) {
             unshift @{ $data[0] }, q{};
         }
@@ -274,39 +249,56 @@ LINE:
         last LINE if ( $opts->{nrow} >= 0 && $. > $opts->{nrow} );
     }
 
+   # If first line contains exactly one column less than the one with the
+   # max. number of columns, we expect that first line contains the header and
+   # first column the rownames (like read.tables does)
     my $auto_col_row = scalar @{ $data[0] || [] } == $max_cols - 1 ? 1 : 0;
 
-    # read column names
+    # in which column are rownames?
+    my $rowname_id
+        = ( defined $opts->{row_names}
+            && reftype \$opts->{row_names} eq 'SCALAR' ) ? $opts->{row_names}
+        : $auto_col_row ? 0
+        :                 -1;
+
+    # re-add the column name if it is omitted. use the same default name as R
+    if ($auto_col_row) {
+        unshift @{ $data[0] }, 'row.names';
+    }
+
     if ( $auto_col_row || $opts->{header} ) {
+
+        # first line contains header
         colnames( \@data, shift @data );
     }
     else {
+
+        # no column names specified, then use the same default as R
         colnames( \@data, [ map { 'V' . $_ } 1 .. $max_cols ] );
+
+        # we might have parsed one line more than needed with the nrow option,
+        # so fix that if necessary
         if ( $opts->{nrow} >= 0 && $. > $opts->{nrow} ) {
             pop @data;
         }
     }
 
-    # read row names
     my @rownames;
-    if ($auto_col_row) {
+    if ( $rowname_id >= 0 ) {
         for my $row (@data) {
-            push @rownames, $row->[0];
-            shift @{$row};
+            push @rownames, splice @{$row}, $rowname_id, 1;
         }
-    }
-    elsif ( defined $opts->{row_names}
-        && reftype \$opts->{row_names} eq 'SCALAR' )
-    {
-        for my $row (@data) {
-            push @rownames, $row->[ $opts->{row_names} ];
-            splice @{$row}, $opts->{row_names}, 1;
-        }
+
+        # remove the column from the colnames array
+        my @colnames = @{ colnames( \@data ) };
+        splice @colnames, $rowname_id, 1;
+        colnames( \@data, \@colnames );
     }
     else {
         @rownames = 1 .. scalar @data;
     }
     rownames( \@data, \@rownames );
+
     return \@data;
 }
 
@@ -398,7 +390,7 @@ header is the number of data columns - 1 if row names are provided.
 
 Similar to 
 
-    write_table($file, sep_char => "\t" );
+    write_table($file, sep_char => "," );
 
 The only difference is that headers include a column for the row names.
 
@@ -451,7 +443,7 @@ implementation.
   Text::CSV   : 
   R           : encoding
   Default     : 
-  Description : if specified, the file is opened with '<:encoding(value)' 
+  Description : if specified, the file is opened with ':encoding(value)' 
 
 =back
 
@@ -573,13 +565,9 @@ Please report any bugs or feature requests to
 C<bug-text-csv-r@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org>. 
 
-=head1 AUTHOR
-
-M. Riester, E<lt>limaone@cpan.orgE<gt>
-
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2010 by M. Riester.
+Copyright (C) 2010 E<lt>limaone@cpan.orgE<gt>
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself. See L<perlartistic>.
