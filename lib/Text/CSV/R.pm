@@ -10,7 +10,7 @@ use Text::CSV;
 use Text::CSV::R::Matrix;
 use Carp;
 use Scalar::Util qw(reftype looks_like_number openhandle);
-use List::Util qw(max);
+use List::Util qw(min max);
 
 our @ISA = qw(Exporter);
 
@@ -22,7 +22,7 @@ our %EXPORT_TAGS = (
 
 our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
-our $VERSION = '0.2';
+our $VERSION = '0.3';
 
 # A mapping of the R options to the Text:CSV options. False if there is no
 # Text::CSV equivalent (specified because R options are not passed to
@@ -148,12 +148,13 @@ sub _fill {
     my ($data) = @_;
     my @l = map { scalar @{$_} } @{$data};
     my $max = max @l;
+    if ($max == min @l) { return; } 
     for my $row_id ( 0 .. $#l ) {
         for my $i ( 1 .. ( $max - $l[$row_id] ) ) {
             push @{ $data->[$row_id] }, q{};
         }
     }
-    return $data;
+    return;
 }
 
 sub _read {
@@ -167,7 +168,7 @@ sub _read {
     _replace_dec( $data_ref, $opts, 1 );
 
     if ( defined $opts->{fill} && $opts->{fill} ) {
-        $data_ref = _fill($data_ref);
+        _fill($data_ref);
     }
 
     return $data_ref;
@@ -179,7 +180,7 @@ sub _write {
     my ( $fh, $toclose ) = _get_fh( $file, 0, $opts );
     _replace_dec( $data_ref, $opts, 0 );
     if ( defined $opts->{fill} && $opts->{fill} ) {
-        $data_ref = _fill($data_ref);
+        _fill($data_ref);
     }
     _write_to_fh( $data_ref, $fh, $opts );
     if ($toclose) {
@@ -357,7 +358,7 @@ Text::CSV::R - Text::CSV wrapper similar to R's read.table and write.table
 
 =head1 DESCRIPTION
 
-This is just a convinient wrapper around L<Text::CSV>. It behavious mostly
+This is just a convenient wrapper around L<Text::CSV>. It behaves mostly
 like R's read.table and write.table functions. This module has a very simple
 API and uses the simplest possible data structure for a table: a reference to a
 two-dimensional array. It is very lightweight and has L<Text::CSV> as only
